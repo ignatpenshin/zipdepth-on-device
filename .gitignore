@@ -3,3 +3,8 @@ dist/
 .venv-export/
 *.log
 .DS_Store
+
+# local screenshots / scratch
+*.jpg
+*.png
+_*.mjs

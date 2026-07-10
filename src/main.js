@@ -2,19 +2,20 @@ import { colorizeInto } from './colormap.js'
 
 const WEIGHTS_URL = '/models/zipdepth_weights.data'
 const graphUrl = (s) => `/models/zipdepth_${s}.onnx`
-const PANEL = 480 // display panel size (px) per view
 
 // --- Telegram Mini App bootstrap (harmless in a normal browser) -------------
 const tg = window.Telegram?.WebApp
 if (tg) { try { tg.ready(); tg.expand() } catch {} }
 
 const $ = (id) => document.getElementById(id)
-const video = $('video'), viewCanvas = $('view'), badge = $('badge'), hint = $('hint')
+const video = $('video'), viewCanvas = $('view'), stage = $('stage'), badge = $('badge'), hint = $('hint')
 const fpsEl = $('fps'), infEl = $('infms'), epEl = $('ep')
 const loader = $('loader'), barFill = $('bar-fill'), barText = $('bar-text')
-const recDot = $('rec-dot')
+const recDot = $('rec-dot'), zoomBadge = $('zoom-badge')
 const btnLive = $('btn-live'), btnRec = $('btn-rec'), btnPhotoPick = $('btn-photo-pick'), fileInput = $('file')
-const resSel = $('res'), camSel = $('camsel'), zoomField = $('zoom-field'), zoom = $('zoom'), camRow = $('cam-row')
+const resSel = $('res'), camSel = $('camsel'), camRow = $('cam-row')
+const zoomRow = $('zoom-row'), zoom = $('zoom'), zoomVal = $('zoomval'), lensBox = $('lens')
+const btnCam = $('btn-cam'), camInfo = $('caminfo')
 const tabLive = $('tab-live'), tabPhoto = $('tab-photo')
 const vctx = viewCanvas.getContext('2d')
 
@@ -24,6 +25,7 @@ let size = parseInt(resSel.value, 10)
 let ready = false, busy = false, switching = false
 let stream = null, track = null, photoImg = null
 let lastTs = 0, fpsAvg = 0, blackFrames = 0
+let hasNativeZoom = false, zoomFactor = 1     // zoomFactor: digital crop factor (native uses applyConstraints)
 
 // --- per-resolution buffers -------------------------------------------------
 let depthCanvas, dctx, rgba, imgData, chw, pre, pctx
@@ -45,7 +47,7 @@ worker.onmessage = (e) => {
   if (m.type === 'ready' || m.type === 'model-set') {
     ready = true; switching = false; busy = false
     badge.textContent = m.ep.toUpperCase(); badge.className = 'badge ok'; epEl.textContent = m.ep
-    if (m.type === 'ready') { loader.classList.add('hidden'); }
+    if (m.type === 'ready') loader.classList.add('hidden')
     if (mode === 'photo' && photoImg) runInfer(photoImg, photoImg.naturalWidth, photoImg.naturalHeight)
   } else if (m.type === 'result') {
     busy = false
@@ -74,7 +76,6 @@ async function fetchProgress(url, onProgress) {
   for (const c of chunks) { out.set(c, off); off += c.length }
   return out.buffer
 }
-
 async function boot() {
   badge.textContent = 'loading'
   try {
@@ -85,9 +86,7 @@ async function boot() {
     })
     const graph = await (await fetch(graphUrl(size))).arrayBuffer()
     worker.postMessage({ type: 'init', weights, graph, size }, [weights, graph])
-  } catch (e) {
-    loader.classList.add('hidden'); showHint('Model load failed: ' + e.message)
-  }
+  } catch (e) { loader.classList.add('hidden'); showHint('Model load failed: ' + e.message) }
 }
 boot()
 
@@ -101,9 +100,16 @@ async function setResolution(s) {
 }
 resSel.addEventListener('change', () => setResolution(parseInt(resSel.value, 10)))
 
-// --- Preprocess: center-crop square -> size, /255 CHW -----------------------
+// --- Crop (square, center) with digital zoom --------------------------------
+function cropRect(sw, sh) {
+  const base = Math.min(sw, sh)
+  const s = base / (hasNativeZoom ? 1 : zoomFactor)
+  return { s, sx: (sw - s) / 2, sy: (sh - s) / 2 }
+}
+
+// --- Preprocess: crop -> size, /255 CHW -------------------------------------
 function preprocess(source, sw, sh) {
-  const s = Math.min(sw, sh), sx = (sw - s) / 2, sy = (sh - s) / 2
+  const { s, sx, sy } = cropRect(sw, sh)
   pctx.drawImage(source, sx, sy, s, s, 0, 0, size, size)
   const { data } = pctx.getImageData(0, 0, size, size)
   const plane = size * size
@@ -121,7 +127,7 @@ function runInfer(source, sw, sh) {
   worker.postMessage({ type: 'infer', buffer: buf, reqSize: size }, [buf])
 }
 
-// --- Depth result -> depth canvas + stats -----------------------------------
+// --- Depth result -----------------------------------------------------------
 function onDepth(depth, ms) {
   colorizeInto(depth, rgba, 255)
   dctx.putImageData(imgData, 0, 0)
@@ -132,25 +138,34 @@ function onDepth(depth, ms) {
   if (mode === 'photo' && photoImg) compose(photoImg, photoImg.naturalWidth, photoImg.naturalHeight)
 }
 
-// --- Compositor: draw the view (split | overlay) ----------------------------
-function setViewSize(w, h) { if (viewCanvas.width !== w) viewCanvas.width = w; if (viewCanvas.height !== h) viewCanvas.height = h }
+// --- Compositor: fills the stage; split or overlay --------------------------
+function panel(img, cx, cy, cw, ch, dx, dy, dw, dh) {
+  // cover-fit the square crop (cx,cy,cw,ch) into dest rect, clipped
+  vctx.save()
+  vctx.beginPath(); vctx.rect(dx, dy, dw, dh); vctx.clip()
+  const scale = Math.max(dw / cw, dh / ch)
+  const w = cw * scale, h = ch * scale
+  vctx.drawImage(img, cx, cy, cw, ch, dx + (dw - w) / 2, dy + (dh - h) / 2, w, h)
+  vctx.restore()
+}
 function compose(source, sw, sh) {
-  const s = Math.min(sw, sh), sx = (sw - s) / 2, sy = (sh - s) / 2
+  const dpr = Math.min(window.devicePixelRatio || 1, 2)
+  const W = Math.max(1, Math.round(stage.clientWidth * dpr))
+  const H = Math.max(1, Math.round(stage.clientHeight * dpr))
+  if (viewCanvas.width !== W) viewCanvas.width = W
+  if (viewCanvas.height !== H) viewCanvas.height = H
+  vctx.fillStyle = '#000'; vctx.fillRect(0, 0, W, H)
+  const { s, sx, sy } = cropRect(sw, sh)
+  const dw = depthCanvas.width
   if (displayMode === 'overlay') {
-    setViewSize(PANEL, PANEL)
-    vctx.drawImage(source, sx, sy, s, s, 0, 0, PANEL, PANEL)
-    vctx.globalAlpha = 0.6; vctx.drawImage(depthCanvas, 0, 0, PANEL, PANEL); vctx.globalAlpha = 1
-  } else {
-    const portrait = viewCanvas.parentElement.clientHeight >= viewCanvas.parentElement.clientWidth
-    if (portrait) {
-      setViewSize(PANEL, PANEL * 2)
-      vctx.drawImage(source, sx, sy, s, s, 0, 0, PANEL, PANEL)
-      vctx.drawImage(depthCanvas, 0, PANEL, PANEL, PANEL)
-    } else {
-      setViewSize(PANEL * 2, PANEL)
-      vctx.drawImage(source, sx, sy, s, s, 0, 0, PANEL, PANEL)
-      vctx.drawImage(depthCanvas, PANEL, 0, PANEL, PANEL)
-    }
+    panel(source, sx, sy, s, s, 0, 0, W, H)
+    vctx.globalAlpha = 0.6; panel(depthCanvas, 0, 0, dw, dw, 0, 0, W, H); vctx.globalAlpha = 1
+  } else if (H >= W) { // portrait: RGB top, depth bottom
+    panel(source, sx, sy, s, s, 0, 0, W, H / 2)
+    panel(depthCanvas, 0, 0, dw, dw, 0, H / 2, W, H / 2)
+  } else {            // landscape: RGB left, depth right
+    panel(source, sx, sy, s, s, 0, 0, W / 2, H)
+    panel(depthCanvas, 0, 0, dw, dw, W / 2, 0, W / 2, H)
   }
 }
 
@@ -179,30 +194,31 @@ function detectBlack() {
   return false
 }
 
-// --- Camera: start/stop, device list, native zoom ---------------------------
+// --- Camera: start/stop, device list, zoom, info ----------------------------
 async function startLive(deviceId) {
   try {
-    const video_c = deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: 'environment' } }
+    const v = deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: 'environment' } }
     stream = await navigator.mediaDevices.getUserMedia({
-      video: { ...video_c, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false,
+      video: { ...v, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false,
     })
     video.srcObject = stream; await video.play()
     track = stream.getVideoTracks()[0]
     mode = 'live'; blackFrames = 0; hideHint()
     btnLive.textContent = '■ Stop'; btnLive.classList.remove('primary')
-    await populateCameras(); setupZoom()
+    zoomRow.hidden = false; btnCam.hidden = false
+    await populateCameras(); setupZoom(); updateCamInfo()
   } catch (e) { showHint('Camera unavailable: ' + e.message + '\nTry Photo mode.') }
 }
 function stopLive() {
+  if (recorder) stopRec()
   if (stream) stream.getTracks().forEach((t) => t.stop())
   stream = null; track = null; video.srcObject = null
   btnLive.textContent = '● Live'; btnLive.classList.add('primary')
-  if (recorder) stopRec()
+  zoomRow.hidden = true; zoomBadge.classList.add('hidden'); btnCam.hidden = true; camInfo.classList.add('hidden')
 }
 async function populateCameras() {
   const devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput')
-  if (devs.length <= 1) { camRow.querySelector('.field').style.display = 'none'; return }
-  camRow.querySelector('.field').style.display = ''
+  camRow.hidden = devs.length <= 1
   const cur = track?.getSettings?.().deviceId
   camSel.innerHTML = ''
   devs.forEach((d, i) => {
@@ -212,22 +228,82 @@ async function populateCameras() {
     camSel.appendChild(o)
   })
 }
-camSel.addEventListener('change', () => { stopLive(); startLive(camSel.value) })
+camSel.addEventListener('change', () => { const id = camSel.value; stopLive(); startLive(id) })
 
 function setupZoom() {
-  const caps = track?.getCapabilities?.()
-  if (caps && caps.zoom && caps.zoom.max > caps.zoom.min) {
-    zoomField.hidden = false
-    zoom.min = caps.zoom.min; zoom.max = caps.zoom.max
-    zoom.step = caps.zoom.step || 0.1
-    zoom.value = track.getSettings().zoom || caps.zoom.min
-  } else { zoomField.hidden = true }
+  const caps = track?.getCapabilities?.() || {}
+  const set = track?.getSettings?.() || {}
+  lensBox.innerHTML = ''
+  if (caps.zoom && caps.zoom.max > caps.zoom.min) {
+    hasNativeZoom = true
+    zoom.min = caps.zoom.min; zoom.max = caps.zoom.max; zoom.step = caps.zoom.step || 0.1
+    zoom.value = set.zoom || caps.zoom.min
+    buildLensPresets(caps.zoom.min, caps.zoom.max)
+  } else {
+    hasNativeZoom = false
+    zoom.min = 1; zoom.max = 8; zoom.step = 0.1; zoom.value = 1
+    buildLensPresets(1, 8)
+  }
+  applyZoom(parseFloat(zoom.value), false)
 }
-zoom.addEventListener('input', () => {
-  if (track) track.applyConstraints({ advanced: [{ zoom: parseFloat(zoom.value) }] }).catch(() => {})
+function buildLensPresets(min, max) {
+  const marks = [...new Set([min, 1, 2, 3, 5].filter((x) => x >= min && x <= max))]
+  if (marks[marks.length - 1] !== max) marks.push(max)
+  marks.forEach((x) => {
+    const b = document.createElement('button'); b.className = 'seg-btn'; b.dataset.zoom = x
+    b.textContent = (x < 1 ? x.toFixed(1) : x % 1 ? x.toFixed(1) : x) + '×'
+    b.addEventListener('click', () => applyZoom(x, true))
+    lensBox.appendChild(b)
+  })
+}
+function applyZoom(v, fromButton) {
+  const min = parseFloat(zoom.min), max = parseFloat(zoom.max)
+  v = Math.min(max, Math.max(min, v))
+  zoom.value = v
+  zoomVal.textContent = v.toFixed(1) + '×'
+  zoomBadge.textContent = v.toFixed(1) + '×'; zoomBadge.classList.toggle('hidden', v === min && !fromButton)
+  lensBox.querySelectorAll('.seg-btn').forEach((b) => b.classList.toggle('active', Math.abs(parseFloat(b.dataset.zoom) - v) < 0.05))
+  if (hasNativeZoom && track) track.applyConstraints({ advanced: [{ zoom: v }] }).catch(() => {})
+  else zoomFactor = v
+  updateCamInfo()
+}
+zoom.addEventListener('input', () => applyZoom(parseFloat(zoom.value), false))
+
+// pinch-to-zoom on the stage
+let pinchStart = 0, pinchZoom0 = 1
+stage.addEventListener('touchstart', (e) => {
+  if (e.touches.length === 2) { pinchStart = dist(e.touches); pinchZoom0 = parseFloat(zoom.value) }
+}, { passive: true })
+stage.addEventListener('touchmove', (e) => {
+  if (e.touches.length === 2 && pinchStart) { e.preventDefault(); applyZoom(pinchZoom0 * (dist(e.touches) / pinchStart), true) }
+}, { passive: false })
+stage.addEventListener('touchend', () => { pinchStart = 0 })
+function dist(t) { return Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY) }
+
+function updateCamInfo() {
+  if (!track) return
+  const s = track.getSettings?.() || {}, c = track.getCapabilities?.() || {}
+  const rng = (x) => (x && x.min !== undefined ? `${round(x.min)}–${round(x.max)}` : '')
+  const round = (n) => (typeof n === 'number' ? Math.round(n * 100) / 100 : n)
+  const lines = [
+    ['lens', s.label || camSel.selectedOptions[0]?.textContent || '—'],
+    ['resolution', s.width && s.height ? `${s.width}×${s.height}` : '—'],
+    ['frame rate', s.frameRate ? `${Math.round(s.frameRate)} fps` : '—'],
+    ['facing', s.facingMode || '—'],
+    ['zoom', hasNativeZoom ? `${round(s.zoom ?? zoom.value)}× (native ${rng(c.zoom)})` : `${round(zoomFactor)}× (digital)`],
+    ['focus', s.focusMode || (c.focusMode ? c.focusMode.join('/') : '—')],
+    ['exposure', s.exposureMode || '—'],
+    ['torch', c.torch ? 'yes' : 'no'],
+  ]
+  camInfo.textContent = lines.map(([k, v]) => `${(k + ':').padEnd(12)} ${v}`).join('\n')
+}
+btnCam.addEventListener('click', () => {
+  camInfo.classList.toggle('hidden')
+  btnCam.textContent = camInfo.classList.contains('hidden') ? 'camera ▾' : 'camera ▴'
+  updateCamInfo()
 })
 
-// --- Recording (captures whatever the view shows: split or overlay) ---------
+// --- Recording (captures the view: split or overlay) ------------------------
 let recorder = null, chunks = []
 function pickMime() {
   for (const m of ['video/mp4;codecs=h264', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'])
@@ -235,17 +311,15 @@ function pickMime() {
   return ''
 }
 function startRec() {
-  const cs = viewCanvas.captureStream(30)
   const mime = pickMime()
-  recorder = new MediaRecorder(cs, mime ? { mimeType: mime } : undefined)
+  recorder = new MediaRecorder(viewCanvas.captureStream(30), mime ? { mimeType: mime } : undefined)
   chunks = []
   recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data) }
   recorder.onstop = () => {
     const type = recorder.mimeType || 'video/webm'
-    const blob = new Blob(chunks, { type })
-    const ext = type.includes('mp4') ? 'mp4' : 'webm'
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a'); a.href = url; a.download = `zipdepth_${displayMode}.${ext}`
+    const url = URL.createObjectURL(new Blob(chunks, { type }))
+    const a = document.createElement('a'); a.href = url
+    a.download = `zipdepth_${displayMode}.${type.includes('mp4') ? 'mp4' : 'webm'}`
     document.body.appendChild(a); a.click(); a.remove()
     setTimeout(() => URL.revokeObjectURL(url), 4000)
   }
@@ -272,8 +346,8 @@ function switchMode(m) {
   mode = m
   tabLive.classList.toggle('active', m === 'live'); tabPhoto.classList.toggle('active', m === 'photo')
   const live = m === 'live'
-  btnLive.hidden = !live; btnRec.hidden = !live; camRow.hidden = !live
-  btnPhotoPick.hidden = live
+  btnLive.hidden = !live; btnRec.hidden = !live; camRow.hidden = !live || camSel.options.length <= 1
+  zoomRow.hidden = !live || !stream; btnPhotoPick.hidden = live
   if (!live) stopLive()
 }
 tabLive.addEventListener('click', () => switchMode('live'))
@@ -290,6 +364,7 @@ $('view-seg').addEventListener('click', (e) => {
 $('btn-info').addEventListener('click', () => $('modal').classList.remove('hidden'))
 $('modal-close').addEventListener('click', () => $('modal').classList.add('hidden'))
 $('modal').addEventListener('click', (e) => { if (e.target.id === 'modal') $('modal').classList.add('hidden') })
+window.addEventListener('resize', () => { if (mode === 'photo' && photoImg) compose(photoImg, photoImg.naturalWidth, photoImg.naturalHeight) })
 
 function showHint(t) { hint.textContent = t; hint.classList.remove('hidden') }
 function hideHint() { hint.classList.add('hidden') }

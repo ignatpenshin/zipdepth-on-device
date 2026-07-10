@@ -17,7 +17,6 @@
       </div>
     </header>
 
-    <!-- mode tabs -->
     <div class="tabs">
       <button id="tab-live" class="tab active">Live</button>
       <button id="tab-photo" class="tab">Photo</button>
@@ -27,24 +26,25 @@
       <video id="video" playsinline muted autoplay hidden></video>
       <canvas id="view"></canvas>
       <div id="hint" class="hint hidden"></div>
-
-      <!-- model download progress -->
       <div id="loader" class="loader">
         <div class="loader-label">Loading model…</div>
         <div class="bar"><div id="bar-fill" class="bar-fill"></div></div>
         <div id="bar-text" class="bar-text">0%</div>
       </div>
-
       <span id="rec-dot" class="rec-dot hidden">● REC</span>
+      <div id="zoom-badge" class="zoom-badge hidden">1.0×</div>
     </div>
 
     <div id="stats">
       <span id="fps">– fps</span>
       <span id="infms">– ms</span>
       <span id="ep">–</span>
+      <button id="btn-cam" class="link-btn" hidden>camera ▾</button>
     </div>
 
-    <!-- controls: view + resolution -->
+    <pre id="caminfo" class="caminfo hidden"></pre>
+
+    <!-- view mode + resolution -->
     <div class="row">
       <div class="seg" id="view-seg">
         <button data-view="split" class="seg-btn active">Split</button>
@@ -62,19 +62,23 @@
       </label>
     </div>
 
-    <!-- camera controls (shown in live mode when supported) -->
+    <!-- camera device -->
     <div class="row" id="cam-row">
-      <label class="field grow">
-        <span>Camera</span>
+      <label class="field wide">
+        <span>Cam</span>
         <select id="camsel"></select>
-      </label>
-      <label class="field grow" id="zoom-field" hidden>
-        <span>Zoom</span>
-        <input id="zoom" type="range" min="1" max="1" step="0.1" value="1" />
       </label>
     </div>
 
-    <!-- primary actions -->
+    <!-- zoom: lens presets + slider (shown when live) -->
+    <div class="row" id="zoom-row" hidden>
+      <div class="seg" id="lens"></div>
+      <label class="field wide">
+        <input id="zoom" type="range" min="1" max="1" step="0.1" value="1" />
+        <span id="zoomval" class="zoomval">1.0×</span>
+      </label>
+    </div>
+
     <div id="controls">
       <button id="btn-live" class="primary">● Live</button>
       <button id="btn-rec">Record</button>
@@ -83,7 +87,6 @@
     </div>
   </div>
 
-  <!-- info modal -->
   <div id="modal" class="modal hidden">
     <div class="sheet">
       <button id="modal-close" class="icon close">✕</button>
