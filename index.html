@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+  <title>ZipDepth · on-device depth</title>
+  <script src="/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <div id="app">
+    <header>
+      <span class="title">⚡ ZipDepth</span>
+      <div class="head-right">
+        <span id="badge" class="badge">…</span>
+        <button id="btn-info" class="icon" title="About">ⓘ</button>
+      </div>
+    </header>
+
+    <!-- mode tabs -->
+    <div class="tabs">
+      <button id="tab-live" class="tab active">Live</button>
+      <button id="tab-photo" class="tab">Photo</button>
+    </div>
+
+    <div id="stage">
+      <video id="video" playsinline muted autoplay hidden></video>
+      <canvas id="view"></canvas>
+      <div id="hint" class="hint hidden"></div>
+
+      <!-- model download progress -->
+      <div id="loader" class="loader">
+        <div class="loader-label">Loading model…</div>
+        <div class="bar"><div id="bar-fill" class="bar-fill"></div></div>
+        <div id="bar-text" class="bar-text">0%</div>
+      </div>
+
+      <span id="rec-dot" class="rec-dot hidden">● REC</span>
+    </div>
+
+    <div id="stats">
+      <span id="fps">– fps</span>
+      <span id="infms">– ms</span>
+      <span id="ep">–</span>
+    </div>
+
+    <!-- controls: view + resolution -->
+    <div class="row">
+      <div class="seg" id="view-seg">
+        <button data-view="split" class="seg-btn active">Split</button>
+        <button data-view="overlay" class="seg-btn">Overlay</button>
+      </div>
+      <label class="field">
+        <span>Res</span>
+        <select id="res">
+          <option value="128">128 · fastest</option>
+          <option value="192">192</option>
+          <option value="256" selected>256 · default</option>
+          <option value="320">320</option>
+          <option value="384">384 · best</option>
+        </select>
+      </label>
+    </div>
+
+    <!-- camera controls (shown in live mode when supported) -->
+    <div class="row" id="cam-row">
+      <label class="field grow">
+        <span>Camera</span>
+        <select id="camsel"></select>
+      </label>
+      <label class="field grow" id="zoom-field" hidden>
+        <span>Zoom</span>
+        <input id="zoom" type="range" min="1" max="1" step="0.1" value="1" />
+      </label>
+    </div>
+
+    <!-- primary actions -->
+    <div id="controls">
+      <button id="btn-live" class="primary">● Live</button>
+      <button id="btn-rec">Record</button>
+      <button id="btn-photo-pick" hidden>Choose / take photo</button>
+      <input id="file" type="file" accept="image/*" capture="environment" hidden />
+    </div>
+  </div>
+
+  <!-- info modal -->
+  <div id="modal" class="modal hidden">
+    <div class="sheet">
+      <button id="modal-close" class="icon close">✕</button>
+      <h2>⚡ ZipDepth — on device</h2>
+      <p>Live monocular depth running <b>100% in your browser</b> (WebGPU / WASM via
+        ONNX Runtime Web). No server — frames never leave your device.</p>
+      <h3>Original research</h3>
+      <p><b>ZipDepth</b> (ECCV 2026) · University of Bologna<br>
+        Fabio Tosi, Luca Bartolomei, Matteo Poggi, Stefano Mattoccia</p>
+      <p class="links">
+        <a href="https://zipdepth.github.io/" target="_blank" rel="noopener">Project</a>
+        <a href="https://arxiv.org/abs/2607.08771" target="_blank" rel="noopener">Paper</a>
+        <a href="https://github.com/fabiotosi92/ZipDepth" target="_blank" rel="noopener">Original repo</a>
+      </p>
+      <h3>This on-device demo</h3>
+      <p>Built for fun by <b>Ignat Penshin</b> right after ZipDepth's release.</p>
+      <p class="links">
+        <a href="https://github.com/ignatpenshin/zipdepth-on-device" target="_blank" rel="noopener">Demo repo</a>
+        <a href="https://www.linkedin.com/in/ignat-penshin/" target="_blank" rel="noopener">LinkedIn</a>
+        <a href="https://t.me/ignat_sharit" target="_blank" rel="noopener">TG channel</a>
+        <a href="https://t.me/ignat_penshin" target="_blank" rel="noopener">@ignat_penshin</a>
+      </p>
+      <p class="fine">ZipDepth is MIT-licensed. This demo reuses its released weights.</p>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

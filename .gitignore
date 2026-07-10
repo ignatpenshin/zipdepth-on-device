@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.venv-export/
+*.log
+.DS_Store
