@@ -3,10 +3,6 @@ import { colorizeInto } from './colormap.js'
 const WEIGHTS_URL = '/models/zipdepth_weights.data'
 const graphUrl = (s) => `/models/zipdepth_${s}.onnx`
 
-// --- Telegram Mini App bootstrap (harmless in a normal browser) -------------
-const tg = window.Telegram?.WebApp
-if (tg) { try { tg.ready(); tg.expand() } catch {} }
-
 const $ = (id) => document.getElementById(id)
 const video = $('video'), viewCanvas = $('view'), stage = $('stage'), badge = $('badge'), hint = $('hint')
 const fpsEl = $('fps'), infEl = $('infms'), epEl = $('ep')
@@ -187,7 +183,7 @@ function detectBlack() {
   if (sum / (64 * 3) < 3) {
     if (++blackFrames > 40) {
       stopLive(); switchMode('photo')
-      showHint('Camera returned a black frame (known iOS/Telegram issue).\nUse Photo mode instead.')
+      showHint('Camera returned a black frame.\nTry Photo mode instead.')
       return true
     }
   } else blackFrames = 0

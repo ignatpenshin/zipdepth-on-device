@@ -2,7 +2,7 @@
 
 Live **monocular depth estimation running 100% in your browser** — WebGPU (with a WASM
 fallback) via ONNX Runtime Web. No inference server, no uploads: camera frames never leave
-your device. Packaged to run standalone or as a **Telegram Mini App**.
+your device. Just a static web page — open it and point your camera.
 
 **▶ Live demo:** https://zipdepth.pages.dev
 
@@ -13,8 +13,8 @@ your device. Packaged to run standalone or as a **Telegram Mini App**.
   the device exposes them, not just digital zoom.
 - 🎚️ **On-device resolution switch** (128 → 384) to trade quality vs. FPS live.
 - ⏺️ **Record** the split or overlay view to a video file.
-- 🖼️ **Photo mode** — run depth on a picture (also the automatic fallback if the in-app
-  camera misbehaves, e.g. the known iOS/Telegram black-frame bug).
+- 🖼️ **Photo mode** — run depth on a picture (also the automatic fallback if the live
+  camera returns no usable frames).
 - 📊 Live FPS / inference-time / execution-provider readout.
 
 ## How it works
@@ -49,9 +49,6 @@ npx cloudflared tunnel --url http://localhost:5173
 npm run build
 npx wrangler pages deploy dist --project-name zipdepth
 ```
-
-Then point a Telegram bot's Web App URL (via **@BotFather → Menu Button**) at the deployed
-site.
 
 ## Regenerate the models
 
