@@ -19,11 +19,13 @@
     <div class="tabs">
       <button id="tab-live" class="tab active">Live</button>
       <button id="tab-photo" class="tab">Photo</button>
+      <button id="tab-3d" class="tab">3D</button>
     </div>
 
     <div id="stage">
       <video id="video" playsinline muted autoplay hidden></video>
       <canvas id="view"></canvas>
+      <canvas id="cloud" hidden></canvas>
       <div id="hint" class="hint hidden"></div>
       <div id="loader" class="loader">
         <div class="loader-label">Loading model…</div>
@@ -76,6 +78,27 @@
         <input id="zoom" type="range" min="1" max="1" step="0.1" value="1" />
         <span id="zoomval" class="zoomval">1.0×</span>
       </label>
+    </div>
+
+    <!-- 3D point-cloud controls (shown on the 3D tab) -->
+    <div id="cloud-panel" hidden>
+      <div class="row">
+        <div class="seg" id="cloud-color">
+          <button data-cm="0" class="seg-btn active">RGB</button>
+          <button data-cm="1" class="seg-btn">Depth</button>
+        </div>
+        <button id="btn-gyro" class="link-btn">Gyro look: off</button>
+        <button id="btn-freeze" class="link-btn">Freeze</button>
+        <button id="btn-recenter" class="link-btn">Recenter</button>
+      </div>
+      <div class="row cloud-sliders">
+        <label class="field"><span>FOV</span><input id="c-fov" type="range" min="40" max="90" step="1" value="58"><span id="c-fov-v" class="zoomval">58°</span></label>
+        <label class="field"><span>Size</span><input id="c-size" type="range" min="0.004" max="0.04" step="0.001" value="0.012"></label>
+      </div>
+      <div class="row cloud-sliders">
+        <label class="field"><span>Near</span><input id="c-near" type="range" min="0.2" max="3" step="0.05" value="0.6"></label>
+        <label class="field"><span>Far</span><input id="c-far" type="range" min="1" max="10" step="0.1" value="4"></label>
+      </div>
     </div>
 
     <div id="controls">

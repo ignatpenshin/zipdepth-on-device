@@ -1,4 +1,7 @@
 import { colorizeInto } from './colormap.js'
+import { CloudRenderer } from './cloud/renderer.js'
+import { OrbitCamera } from './cloud/camera.js'
+import { IMU } from './sensors.js'
 
 const WEIGHTS_URL = '/models/zipdepth_weights.data'
 const graphUrl = (s) => `/models/zipdepth_${s}.onnx`
@@ -12,7 +15,8 @@ const btnLive = $('btn-live'), btnRec = $('btn-rec'), btnPhotoPick = $('btn-phot
 const resSel = $('res'), camSel = $('camsel'), camRow = $('cam-row')
 const zoomRow = $('zoom-row'), zoom = $('zoom'), zoomVal = $('zoomval'), lensBox = $('lens')
 const btnCam = $('btn-cam'), camInfo = $('caminfo')
-const tabLive = $('tab-live'), tabPhoto = $('tab-photo')
+const tabLive = $('tab-live'), tabPhoto = $('tab-photo'), tab3d = $('tab-3d')
+const cloudCanvas = $('cloud'), cloudPanel = $('cloud-panel')
 const vctx = viewCanvas.getContext('2d')
 
 let displayMode = 'split'   // 'split' | 'overlay'
@@ -22,6 +26,7 @@ let ready = false, busy = false, switching = false
 let stream = null, track = null, photoImg = null
 let lastTs = 0, fpsAvg = 0, blackFrames = 0
 let hasNativeZoom = false, zoomFactor = 1     // zoomFactor: digital crop factor (native uses applyConstraints)
+let is3D = false, cloud = null, cam = null, imu = null, cloudFrozen = false, cloudRAF = 0
 
 // --- per-resolution buffers -------------------------------------------------
 let depthCanvas, dctx, rgba, imgData, chw, pre, pctx
@@ -104,10 +109,12 @@ function cropRect(sw, sh) {
 }
 
 // --- Preprocess: crop -> size, /255 CHW -------------------------------------
+let lastCropRGBA = null   // aligned color crop for the in-flight inference (3D)
 function preprocess(source, sw, sh) {
   const { s, sx, sy } = cropRect(sw, sh)
   pctx.drawImage(source, sx, sy, s, s, 0, 0, size, size)
   const { data } = pctx.getImageData(0, 0, size, size)
+  lastCropRGBA = data
   const plane = size * size
   for (let i = 0, p = 0; i < plane; i++, p += 4) {
     chw[i] = data[p] / 255
@@ -125,13 +132,20 @@ function runInfer(source, sw, sh) {
 
 // --- Depth result -----------------------------------------------------------
 function onDepth(depth, ms) {
+  updateStats(ms)
+  if (is3D) {
+    if (cloud && !cloudFrozen && lastCropRGBA) cloud.setFrame(depth, lastCropRGBA, size)
+    return
+  }
   colorizeInto(depth, rgba, 255)
   dctx.putImageData(imgData, 0, 0)
+  if (mode === 'photo' && photoImg) compose(photoImg, photoImg.naturalWidth, photoImg.naturalHeight)
+}
+function updateStats(ms) {
   infEl.textContent = ms.toFixed(0) + ' ms'
   const now = performance.now()
   if (lastTs) { const f = 1000 / (now - lastTs); fpsAvg = fpsAvg ? fpsAvg * 0.8 + f * 0.2 : f; fpsEl.textContent = fpsAvg.toFixed(0) + ' fps' }
   lastTs = now
-  if (mode === 'photo' && photoImg) compose(photoImg, photoImg.naturalWidth, photoImg.naturalHeight)
 }
 
 // --- Compositor: fills the stage; split or overlay --------------------------
@@ -170,7 +184,7 @@ function tick() {
   requestAnimationFrame(tick)
   if (mode !== 'live' || !stream) return
   if (video.readyState < 2 || !video.videoWidth) return
-  compose(video, video.videoWidth, video.videoHeight)
+  if (!is3D) compose(video, video.videoWidth, video.videoHeight)
   if (detectBlack()) return
   if (ready && !busy && !switching) runInfer(video, video.videoWidth, video.videoHeight)
 }
@@ -339,15 +353,27 @@ fileInput.addEventListener('change', (e) => { if (e.target.files[0]) loadPhoto(e
 
 // --- Mode + view + modal wiring ---------------------------------------------
 function switchMode(m) {
-  mode = m
-  tabLive.classList.toggle('active', m === 'live'); tabPhoto.classList.toggle('active', m === 'photo')
+  is3D = m === '3d'
+  mode = is3D ? 'live' : m       // 3D sources frames from the live camera
+  tabLive.classList.toggle('active', m === 'live')
+  tabPhoto.classList.toggle('active', m === 'photo')
+  tab3d.classList.toggle('active', is3D)
   const live = m === 'live'
-  btnLive.hidden = !live; btnRec.hidden = !live; camRow.hidden = !live || camSel.options.length <= 1
-  zoomRow.hidden = !live || !stream; btnPhotoPick.hidden = live
-  if (!live) stopLive()
+  // 2D vs 3D surfaces
+  viewCanvas.hidden = is3D
+  cloudCanvas.hidden = !is3D
+  cloudPanel.hidden = !is3D
+  // 2D controls only in 2D live
+  document.getElementById('view-seg').closest('.row').hidden = is3D
+  btnLive.hidden = !live || is3D; btnRec.hidden = !live || is3D
+  camRow.hidden = (!live && !is3D) || camSel.options.length <= 1
+  zoomRow.hidden = (!live && !is3D) || !stream; btnPhotoPick.hidden = live || is3D
+  if (is3D) { enter3D() }
+  else if (!live) stopLive()
 }
 tabLive.addEventListener('click', () => switchMode('live'))
 tabPhoto.addEventListener('click', () => switchMode('photo'))
+tab3d.addEventListener('click', () => switchMode('3d'))
 btnLive.addEventListener('click', () => (stream ? stopLive() : startLive()))
 
 $('view-seg').addEventListener('click', (e) => {
@@ -364,5 +390,56 @@ window.addEventListener('resize', () => { if (mode === 'photo' && photoImg) comp
 
 function showHint(t) { hint.textContent = t; hint.classList.remove('hidden') }
 function hideHint() { hint.classList.add('hidden') }
+
+// --- 3D point-cloud mode ----------------------------------------------------
+function applyCloudTarget() {
+  if (cam && cloud) cam.setTarget(-(cloud.params.near + cloud.params.far) / 2)
+}
+async function enter3D() {
+  if (!cloud) {
+    try {
+      cloud = new CloudRenderer(cloudCanvas)
+      await cloud.init()
+      cam = new OrbitCamera(cloudCanvas)
+      imu = new IMU()
+      applyCloudTarget()
+      wireCloudControls()
+      cloudTick()
+    } catch (e) { showHint('3D unavailable: ' + e.message + '\n(WebGPU required)'); cloud = null; return }
+  }
+  if (!stream) startLive()
+}
+function cloudTick() {
+  cloudRAF = requestAnimationFrame(cloudTick)
+  if (!is3D || !cloud) return
+  const aspect = (cloudCanvas.clientWidth || 1) / (cloudCanvas.clientHeight || 1)
+  const { view, proj } = cam.viewProj(aspect)
+  cloud.render(view, proj)
+}
+function wireCloudControls() {
+  const fov = $('c-fov'), fovV = $('c-fov-v'), sz = $('c-size'), near = $('c-near'), far = $('c-far')
+  fov.addEventListener('input', () => { cloud.params.fovDeg = +fov.value; fovV.textContent = fov.value + '°' })
+  sz.addEventListener('input', () => { cloud.params.radius = +sz.value })
+  near.addEventListener('input', () => { cloud.params.near = +near.value; applyCloudTarget() })
+  far.addEventListener('input', () => { cloud.params.far = +far.value; applyCloudTarget() })
+  $('cloud-color').addEventListener('click', (e) => {
+    const b = e.target.closest('.seg-btn'); if (!b) return
+    cloud.params.colorMode = +b.dataset.cm
+    document.querySelectorAll('#cloud-color .seg-btn').forEach((x) => x.classList.toggle('active', x === b))
+  })
+  $('btn-freeze').addEventListener('click', () => {
+    cloudFrozen = !cloudFrozen
+    $('btn-freeze').textContent = cloudFrozen ? 'Live' : 'Freeze'
+    $('btn-freeze').classList.toggle('rec-on', cloudFrozen)
+  })
+  $('btn-recenter').addEventListener('click', () => { cam.yaw = 0; cam.pitch = 0; imu.recenter() })
+  $('btn-gyro').addEventListener('click', async () => {
+    if (imu.enabled) { imu.disable(); cam.setGyro(0, 0); $('btn-gyro').textContent = 'Gyro look: off'; return }
+    try {
+      await imu.enable((y, p) => cam.setGyro(y, p))
+      $('btn-gyro').textContent = 'Gyro look: on'
+    } catch (e) { showHint(e.message) }
+  })
+}
 
 switchMode('live')
